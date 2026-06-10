@@ -854,14 +854,14 @@ function AccountsPage({ session }: { session: Session }) {
     <section className="page-stack">
       <form className="edit-grid panel" onSubmit={save}>
         <Field label="账号"><input required value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></Field>
-        <Field label="密码"><input required type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></Field>
+        <Field label={editingId ? '密码（留空不改）' : '密码'}><input required={!editingId} type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></Field>
         <Field label="权限"><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="Admin">Admin</option><option value="Reader">Reader</option></select></Field>
         <Field label="关联读者"><select value={form.readerCardNo} onChange={(event) => setForm({ ...form, readerCardNo: event.target.value })}><option value="">无</option>{readers.map((reader) => <option key={reader.readerCardNo} value={reader.readerCardNo}>{reader.name}</option>)}</select></Field>
         <label className="check-field"><input type="checkbox" checked={form.isEnabled} onChange={(event) => setForm({ ...form, isEnabled: event.target.checked })} /> 启用</label>
         <button className="primary-button"><Save size={16} />保存账号</button>
       </form>
       <section className="panel">
-        <DataTable columns={['账号', '权限', '读者证号', '状态', '操作']} rows={items.map((item) => [item.username, item.role, item.readerCardNo ?? '-', item.isEnabled ? '启用' : '禁用', <span className="row-actions" key={item.accountId}><button onClick={() => { setEditingId(item.accountId); setForm({ username: item.username, password: 'reader123', role: item.role, readerCardNo: item.readerCardNo ?? '', isEnabled: item.isEnabled }); }}>编辑</button><button onClick={() => void remove(item.accountId)}><Trash2 size={15} /></button></span>])} />
+        <DataTable columns={['账号', '权限', '读者证号', '状态', '操作']} rows={items.map((item) => [item.username, item.role, item.readerCardNo ?? '-', item.isEnabled ? '启用' : '禁用', <span className="row-actions" key={item.accountId}><button onClick={() => { setEditingId(item.accountId); setForm({ username: item.username, password: '', role: item.role, readerCardNo: item.readerCardNo ?? '', isEnabled: item.isEnabled }); }}>编辑</button><button onClick={() => void remove(item.accountId)}><Trash2 size={15} /></button></span>])} />
       </section>
     </section>
   );

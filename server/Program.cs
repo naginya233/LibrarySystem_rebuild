@@ -176,13 +176,13 @@ books.MapPut("/{isbn}", async (string isbn, UpsertBookRequest request, SqlConnec
 books.MapDelete("/{isbn}", async (string isbn, SqlConnectionFactory db) =>
 {
     await using var connection = db.Create();
-    var openLoans = await connection.ExecuteScalarAsync<int>(
-        "SELECT COUNT(1) FROM dbo.BorrowRecords WHERE Isbn = @isbn AND ReturnDate IS NULL",
+    var loanCount = await connection.ExecuteScalarAsync<int>(
+        "SELECT COUNT(1) FROM dbo.BorrowRecords WHERE Isbn = @isbn",
         new { isbn });
 
-    if (openLoans > 0)
+    if (loanCount > 0)
     {
-        return Results.Conflict(new { message = "该图书存在未归还记录，不能删除。" });
+        return Results.Conflict(new { message = "该图书存在借阅记录，不能删除。" });
     }
 
     var affected = await connection.ExecuteAsync("DELETE FROM dbo.Books WHERE Isbn = @isbn", new { isbn });
@@ -282,13 +282,13 @@ readers.MapPut("/{cardNo}", async (string cardNo, UpsertReaderRequest request, S
 readers.MapDelete("/{cardNo}", async (string cardNo, SqlConnectionFactory db) =>
 {
     await using var connection = db.Create();
-    var openLoans = await connection.ExecuteScalarAsync<int>(
-        "SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReaderCardNo = @cardNo AND ReturnDate IS NULL",
+    var loanCount = await connection.ExecuteScalarAsync<int>(
+        "SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReaderCardNo = @cardNo",
         new { cardNo });
 
-    if (openLoans > 0)
+    if (loanCount > 0)
     {
-        return Results.Conflict(new { message = "该读者存在未归还图书，不能删除。" });
+        return Results.Conflict(new { message = "该读者存在借阅记录，不能删除。" });
     }
 
     await connection.ExecuteAsync("DELETE FROM dbo.Accounts WHERE ReaderCardNo = @cardNo", new { cardNo });
@@ -323,6 +323,11 @@ accounts.MapGet("", async (SqlConnectionFactory db) =>
 
 accounts.MapPost("", async (UpsertAccountRequest request, SqlConnectionFactory db) =>
 {
+    if (string.IsNullOrWhiteSpace(request.Password))
+    {
+        return Results.BadRequest(new { message = "新增账号必须填写密码。" });
+    }
+
     var salt = "LIBRARY_SYSTEM_2026";
     var hash = PasswordService.Hash(request.Username, request.Password, salt);
     await using var connection = db.Create();
@@ -338,9 +343,24 @@ accounts.MapPost("", async (UpsertAccountRequest request, SqlConnectionFactory d
 
 accounts.MapPut("/{accountId:int}", async (int accountId, UpsertAccountRequest request, SqlConnectionFactory db) =>
 {
+    await using var connection = db.Create();
+    if (string.IsNullOrWhiteSpace(request.Password))
+    {
+        var affectedWithoutPassword = await connection.ExecuteAsync(
+            """
+            UPDATE dbo.Accounts
+               SET Username = @Username,
+                   Role = @Role,
+                   ReaderCardNo = @ReaderCardNo,
+                   IsEnabled = @IsEnabled
+             WHERE AccountId = @accountId
+            """,
+            new { accountId, request.Username, request.Role, request.ReaderCardNo, request.IsEnabled });
+        return affectedWithoutPassword == 0 ? Results.NotFound() : Results.NoContent();
+    }
+
     var salt = "LIBRARY_SYSTEM_2026";
     var hash = PasswordService.Hash(request.Username, request.Password, salt);
-    await using var connection = db.Create();
     var affected = await connection.ExecuteAsync(
         """
         UPDATE dbo.Accounts
@@ -673,7 +693,7 @@ public sealed record LoginRequest(string Username, string Password);
 public sealed record LoginResponse(string Token, string Username, string Role, string? ReaderCardNo);
 public sealed record AccountRow(int AccountId, string Username, string PasswordHash, string PasswordSalt, string Role, string? ReaderCardNo, bool IsEnabled);
 public sealed record AccountDto(int AccountId, string Username, string Role, string? ReaderCardNo, bool IsEnabled);
-public sealed record UpsertAccountRequest(string Username, string Password, string Role, string? ReaderCardNo, bool IsEnabled);
+public sealed record UpsertAccountRequest(string Username, string? Password, string Role, string? ReaderCardNo, bool IsEnabled);
 public sealed record BookDto(string Isbn, string Title, string Publisher, string Author, int TotalCopies, int AvailableCopies, bool IsBorrowable);
 public sealed record UpsertBookRequest(string Isbn, string Title, string Publisher, string Author, int TotalCopies, int AvailableCopies, bool IsBorrowable);
 public sealed record ReaderDto(string ReaderCardNo, string Name, string Gender, string Title, int MaxBorrowCount, int BorrowedCount, string Department, string? Phone, decimal UnpaidFine);
