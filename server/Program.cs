@@ -520,42 +520,54 @@ reports.MapGet("/dashboard", async (ClaimsPrincipal user, SqlConnectionFactory d
         var readerStats = await connection.QuerySingleAsync(
             """
             SELECT
-                (SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReaderCardNo = @readerCardNo AND ReturnDate IS NULL) AS CurrentLoans,
-                (SELECT COUNT(1) FROM dbo.vw_OverdueBorrowRecords WHERE ReaderCardNo = @readerCardNo) AS OverdueLoans,
-                (SELECT ISNULL(SUM(Fine), 0) FROM dbo.BorrowRecords WHERE ReaderCardNo = @readerCardNo AND Fine > 0 AND FinePaid = 0) AS UnpaidFine,
-                (SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReaderCardNo = @readerCardNo) AS TotalLoans
+                (SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReaderCardNo = @readerCardNo AND ReturnDate IS NULL) AS currentLoans,
+                (SELECT COUNT(1) FROM dbo.vw_OverdueBorrowRecords WHERE ReaderCardNo = @readerCardNo) AS overdueLoans,
+                (SELECT ISNULL(SUM(Fine), 0) FROM dbo.BorrowRecords WHERE ReaderCardNo = @readerCardNo AND Fine > 0 AND FinePaid = 0) AS unpaidFine,
+                (SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReaderCardNo = @readerCardNo) AS totalLoans
             """,
             new { readerCardNo });
-        return Results.Ok(new { stats = readerStats, monthly = Array.Empty<object>(), popular = Array.Empty<object>() });
+
+        var readerMonthly = await connection.QueryAsync(
+            """
+            SELECT FORMAT(BorrowDate, 'yyyy-MM') AS month, COUNT(1) AS count
+            FROM dbo.BorrowRecords
+            WHERE ReaderCardNo = @readerCardNo
+              AND BorrowDate >= DATEADD(MONTH, -6, CAST(GETDATE() AS DATE))
+            GROUP BY FORMAT(BorrowDate, 'yyyy-MM')
+            ORDER BY month
+            """,
+            new { readerCardNo });
+
+        return Results.Ok(new { stats = readerStats, monthly = readerMonthly, popular = Array.Empty<object>() });
     }
 
     var stats = await connection.QuerySingleAsync(
         """
         SELECT
-            (SELECT COUNT(1) FROM dbo.Books) AS BookKinds,
-            (SELECT ISNULL(SUM(TotalCopies), 0) FROM dbo.Books) AS TotalCopies,
-            (SELECT ISNULL(SUM(AvailableCopies), 0) FROM dbo.Books) AS AvailableCopies,
-            (SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReturnDate IS NULL) AS CurrentLoans,
-            (SELECT COUNT(1) FROM dbo.vw_OverdueBorrowRecords) AS OverdueLoans,
-            (SELECT ISNULL(SUM(Fine), 0) FROM dbo.BorrowRecords WHERE Fine > 0 AND FinePaid = 0) AS UnpaidFine
+            (SELECT COUNT(1) FROM dbo.Books) AS bookKinds,
+            (SELECT ISNULL(SUM(TotalCopies), 0) FROM dbo.Books) AS totalCopies,
+            (SELECT ISNULL(SUM(AvailableCopies), 0) FROM dbo.Books) AS availableCopies,
+            (SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReturnDate IS NULL) AS currentLoans,
+            (SELECT COUNT(1) FROM dbo.vw_OverdueBorrowRecords) AS overdueLoans,
+            (SELECT ISNULL(SUM(Fine), 0) FROM dbo.BorrowRecords WHERE Fine > 0 AND FinePaid = 0) AS unpaidFine
         """);
 
     var monthly = await connection.QueryAsync(
         """
-        SELECT FORMAT(BorrowDate, 'yyyy-MM') AS Month, COUNT(1) AS Count
+        SELECT FORMAT(BorrowDate, 'yyyy-MM') AS month, COUNT(1) AS count
         FROM dbo.BorrowRecords
         WHERE BorrowDate >= DATEADD(MONTH, -6, CAST(GETDATE() AS DATE))
         GROUP BY FORMAT(BorrowDate, 'yyyy-MM')
-        ORDER BY Month
+        ORDER BY month
         """);
 
     var popular = await connection.QueryAsync(
         """
-        SELECT TOP 5 b.Title, COUNT(1) AS Count
+        SELECT TOP 5 b.Title AS title, COUNT(1) AS count
         FROM dbo.BorrowRecords br
         JOIN dbo.Books b ON b.Isbn = br.Isbn
         GROUP BY b.Title
-        ORDER BY Count DESC
+        ORDER BY count DESC
         """);
 
     return Results.Ok(new { stats, monthly, popular });

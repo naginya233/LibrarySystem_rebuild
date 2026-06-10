@@ -439,9 +439,13 @@ function DashboardPage({ session }: { session: Session }) {
         <section className="panel">
           <PanelTitle title="近六月借阅趋势" />
           <div className="chart-box">
-            <Suspense fallback={<EmptyState text="图表加载中" />}>
-              <BorrowChart data={data?.monthly ?? []} />
-            </Suspense>
+            {data && data.monthly.length > 0 ? (
+              <Suspense fallback={<EmptyState text="图表加载中" />}>
+                <BorrowChart data={data.monthly} />
+              </Suspense>
+            ) : (
+              <EmptyState text={data ? '暂无借阅趋势' : '图表加载中'} />
+            )}
           </div>
         </section>
         <section className="panel">
@@ -458,6 +462,15 @@ function DashboardPage({ session }: { session: Session }) {
           />
         </section>
       </div>
+      {session.role === 'Admin' && (
+        <section className="panel">
+          <PanelTitle title="热门借阅图书" />
+          <DataTable
+            columns={['书名', '借阅次数']}
+            rows={(data?.popular ?? []).map((item) => [item.title, item.count])}
+          />
+        </section>
+      )}
     </section>
   );
 }
