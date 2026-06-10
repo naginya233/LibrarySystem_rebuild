@@ -211,7 +211,7 @@ readers.MapGet("", async (string? q, SqlConnectionFactory db) =>
         new { Q = string.IsNullOrWhiteSpace(q) ? null : q.Trim() });
 
     return Results.Ok(rows);
-});
+}).RequireAuthorization("AdminOnly");
 
 readers.MapGet("/{cardNo}", async (string cardNo, ClaimsPrincipal user, SqlConnectionFactory db) =>
 {
@@ -439,14 +439,29 @@ loans.MapDelete("/{loanId:int}", async (int loanId, SqlConnectionFactory db) =>
     return affected == 0 ? Results.NotFound() : Results.NoContent();
 }).RequireAuthorization("AdminOnly");
 
-loans.MapPost("/borrow", async (BorrowBookRequest request, SqlConnectionFactory db) =>
+loans.MapPost("/borrow", async (BorrowBookRequest request, ClaimsPrincipal user, SqlConnectionFactory db) =>
 {
     try
     {
+        var readerCardNo = request.ReaderCardNo;
+        if (!user.IsInRole("Admin"))
+        {
+            readerCardNo = user.FindFirstValue("readerCardNo") ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(readerCardNo))
+            {
+                return Results.Forbid();
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(readerCardNo))
+        {
+            return Results.BadRequest(new { message = "请选择读者。" });
+        }
+
         await using var connection = db.Create();
         var loanIdDecimal = await connection.ExecuteScalarAsync<decimal>(
             "dbo.sp_BorrowBook",
-            new { request.ReaderCardNo, request.Isbn, request.BorrowDate, request.LoanDays },
+            new { ReaderCardNo = readerCardNo, request.Isbn, request.BorrowDate, request.LoanDays },
             commandType: CommandType.StoredProcedure);
         return Results.Ok(new { loanId = Convert.ToInt32(loanIdDecimal) });
     }
@@ -454,7 +469,7 @@ loans.MapPost("/borrow", async (BorrowBookRequest request, SqlConnectionFactory 
     {
         return Results.BadRequest(new { message = ex.Message });
     }
-}).RequireAuthorization("AdminOnly");
+}).RequireAuthorization();
 
 loans.MapPost("/{loanId:int}/return", async (int loanId, ReturnBookRequest request, SqlConnectionFactory db) =>
 {

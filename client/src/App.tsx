@@ -468,6 +468,7 @@ function BooksPage({ session }: { session: Session }) {
   const [form, setForm] = useState<Book>(emptyBook);
   const [editing, setEditing] = useState(false);
   const admin = session.role === 'Admin';
+  const canSelfBorrow = session.role === 'Reader';
 
   async function load() {
     setItems(await request<Book[]>(`/books?q=${encodeURIComponent(q)}`, session));
@@ -504,6 +505,29 @@ function BooksPage({ session }: { session: Session }) {
     }
   }
 
+  async function borrowBook(item: Book) {
+    if (!item.isBorrowable || item.availableCopies <= 0) {
+      notify('该图书当前不可借。', 'error');
+      return;
+    }
+
+    try {
+      await request('/borrow-records/borrow', session, {
+        method: 'POST',
+        body: JSON.stringify({
+          readerCardNo: session.readerCardNo,
+          isbn: item.isbn,
+          borrowDate: today(),
+          loanDays: 30,
+        }),
+      });
+      await load();
+      notify(`已借阅《${item.title}》。`);
+    } catch {
+      // Error is shown by request().
+    }
+  }
+
   return (
     <CrudLayout
       title="图书检索"
@@ -525,13 +549,14 @@ function BooksPage({ session }: { session: Session }) {
         </form>
       )}
       <table className="data-table">
-        <thead><tr><th>ISBN</th><th>书名</th><th>作者</th><th>出版社</th><th>馆藏</th><th>可借</th><th>状态</th>{admin && <th>操作</th>}</tr></thead>
+        <thead><tr><th>ISBN</th><th>书名</th><th>作者</th><th>出版社</th><th>馆藏</th><th>可借</th><th>状态</th>{(admin || canSelfBorrow) && <th>操作</th>}</tr></thead>
         <tbody>
           {items.map((item) => (
             <tr key={item.isbn}>
               <td>{item.isbn}</td><td>{item.title}</td><td>{item.author}</td><td>{item.publisher}</td><td>{item.totalCopies}</td><td>{item.availableCopies}</td>
               <td><span className={item.isBorrowable ? 'tag ok' : 'tag warn'}>{item.isBorrowable ? '可借' : '不可借'}</span></td>
               {admin && <td className="row-actions"><button onClick={() => { setForm(item); setEditing(true); }}>编辑</button><button onClick={() => void remove(item.isbn)}><Trash2 size={15} /></button></td>}
+              {canSelfBorrow && <td className="row-actions"><button disabled={!item.isBorrowable || item.availableCopies <= 0} onClick={() => void borrowBook(item)}>借书</button></td>}
             </tr>
           ))}
         </tbody>

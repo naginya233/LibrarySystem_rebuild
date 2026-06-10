@@ -84,6 +84,8 @@ dotnet run --project desktop\LibrarySystem.Desktop.csproj
 - 读者：`2024001 / reader123`
 - 读者：`2024002 / reader123`
 
+读者登录后可进入“图书管理”，在可借图书行点击“借书”完成自助借阅。
+
 ## 8. 常见问题
 
 - 登录失败：确认 SQL Server 容器已启动并完成初始化。

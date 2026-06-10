@@ -113,6 +113,13 @@ select:focus {
   font-weight: 650;
 }
 
+.primary-button:disabled,
+.secondary-button:disabled,
+.row-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .primary-button {
   background: #0f766e;
   color: #ffffff;
