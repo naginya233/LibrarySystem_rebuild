@@ -4,7 +4,6 @@ import {
   BookOpen,
   CircleDollarSign,
   ClipboardList,
-  FileText,
   Library,
   LogOut,
   Plus,
@@ -330,7 +329,6 @@ function Shell({ session, onLogout }: { session: Session; onLogout: () => void }
     { key: 'loans', label: admin ? '借阅管理' : '我的借阅', icon: ClipboardList },
     { key: 'overdue', label: '逾期查询', icon: AlertTriangle },
     ...(admin ? [{ key: 'accounts', label: '账号管理', icon: UserCog }] : []),
-    { key: 'docs', label: '系统文档', icon: FileText },
   ];
 
   useEffect(() => {
@@ -392,7 +390,6 @@ function Shell({ session, onLogout }: { session: Session; onLogout: () => void }
           {active === 'loans' && <LoansPage session={session} />}
           {active === 'overdue' && <OverduePage session={session} />}
           {active === 'accounts' && <AccountsPage session={session} />}
-          {active === 'docs' && <DocsPage />}
         </main>
       </section>
     </div>
@@ -878,22 +875,6 @@ function OverduePage({ session }: { session: Session }) {
     <section className="panel">
       <PanelTitle title="到期未还图书" />
       <DataTable columns={['记录号', 'ISBN', '书名', '读者', '借出日期', '应还日期', '逾期天数', '预计罚款']} rows={items.map((item) => [item.loanId, item.isbn, item.title, `${item.readerName} / ${item.readerCardNo}`, formatDate(item.borrowDate), formatDate(item.dueDate), item.overdueDays, `¥${item.estimatedFine.toFixed(2)}`])} />
-    </section>
-  );
-}
-
-function DocsPage() {
-  return (
-    <section className="page-stack">
-      <article className="panel doc-panel">
-        <PanelTitle title="交付文档" />
-        <p>项目包含数据库设计报告、系统设计文档和运行说明，源码根目录下的 docs 文件夹可直接提交。</p>
-        <ul>
-          <li>数据库设计报告：E-R 图、关系模式、表结构、约束、视图、索引、存储过程。</li>
-          <li>系统设计文档：架构、模块、接口、权限、业务流程、测试。</li>
-          <li>运行说明：Docker SQL Server、后端、前端、桌面壳和安装包构建步骤。</li>
-        </ul>
-      </article>
     </section>
   );
 }
