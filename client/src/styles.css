@@ -242,6 +242,30 @@ select:focus {
   overflow: auto;
 }
 
+.notice {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin-bottom: 16px;
+  border-radius: 6px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 650;
+  border: 1px solid transparent;
+}
+
+.notice.success {
+  color: #0f5f58;
+  background: #e7f4f1;
+  border-color: #b9ddd7;
+}
+
+.notice.error {
+  color: #a12717;
+  background: #fff0ed;
+  border-color: #ffc8bd;
+}
+
 .panel,
 .metric-card {
   background: #ffffff;

@@ -17,13 +17,14 @@ import {
   Users,
 } from 'lucide-react';
 import type * as React from 'react';
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { Component, lazy, Suspense, useEffect, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import type { ChartPoint } from './BorrowChart';
 
 const BorrowChart = lazy(() => import('./BorrowChart'));
 
 const API = '/api';
+let noticeSink: ((notice: { message: string; type: 'success' | 'error' }) => void) | null = null;
 
 type Session = {
   token: string;
@@ -160,22 +161,51 @@ async function request<T>(path: string, session: Session | null, options: Reques
     headers.set('Authorization', `Bearer ${session.token}`);
   }
 
-  const response = await fetch(`${API}${path}`, { ...options, headers });
+  let response: Response;
+  try {
+    response = await fetch(`${API}${path}`, { ...options, headers });
+  } catch {
+    notify('网络连接失败，请确认后端服务已启动。', 'error');
+    throw new Error('网络连接失败，请确认后端服务已启动。');
+  }
+
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { message: text.slice(0, 180) };
+  }
 
   if (!response.ok) {
-    throw new Error(data?.message ?? response.statusText ?? '请求失败');
+    const message = getMessage(data) ?? response.statusText ?? '请求失败';
+    notify(message, 'error');
+    throw new Error(message);
   }
 
   return data as T;
 }
 
+function getMessage(data: unknown) {
+  if (data && typeof data === 'object' && 'message' in data) {
+    return String((data as { message?: unknown }).message ?? '');
+  }
+
+  return '';
+}
+
+function notify(message: string, type: 'success' | 'error' = 'success') {
+  const notice = { message, type };
+  noticeSink?.(notice);
+  try {
+    window.dispatchEvent(new CustomEvent('library-notice', { detail: notice }));
+  } catch {
+    // The direct sink above is the primary path.
+  }
+}
+
 export default function App() {
-  const [session, setSession] = useState<Session | null>(() => {
-    const raw = localStorage.getItem('library-session');
-    return raw ? (JSON.parse(raw) as Session) : null;
-  });
+  const [session, setSession] = useState<Session | null>(() => readStoredSession());
 
   const saveSession = (next: Session | null) => {
     setSession(next);
@@ -190,7 +220,53 @@ export default function App() {
     return <LoginPage onLogin={saveSession} />;
   }
 
-  return <Shell session={session} onLogout={() => saveSession(null)} />;
+  return (
+    <ErrorBoundary onReset={() => saveSession(null)}>
+      <Shell session={session} onLogout={() => saveSession(null)} />
+    </ErrorBoundary>
+  );
+}
+
+function readStoredSession() {
+  try {
+    const raw = window.localStorage.getItem('library-session');
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<Session>;
+    if (!value.token || !value.username || (value.role !== 'Admin' && value.role !== 'Reader')) {
+      window.localStorage.removeItem('library-session');
+      return null;
+    }
+    return value as Session;
+  } catch {
+    return null;
+  }
+}
+
+class ErrorBoundary extends Component<{ children: React.ReactNode; onReset: () => void }, { error: string | null }> {
+  state = { error: null };
+
+  static getDerivedStateFromError(error: unknown) {
+    return { error: error instanceof Error ? error.message : '页面渲染失败。' };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <main className="login-page">
+          <section className="login-panel">
+            <div className="brand-mark">
+              <AlertTriangle size={30} />
+            </div>
+            <h1>页面加载失败</h1>
+            <p>{this.state.error}</p>
+            <button className="primary-button" onClick={this.props.onReset}>返回登录</button>
+          </section>
+        </main>
+      );
+    }
+
+    return this.props.children;
+  }
 }
 
 function LoginPage({ onLogin }: { onLogin: (session: Session) => void }) {
@@ -245,6 +321,7 @@ function LoginPage({ onLogin }: { onLogin: (session: Session) => void }) {
 
 function Shell({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [active, setActive] = useState('dashboard');
+  const [notice, setNotice] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const admin = session.role === 'Admin';
   const nav: NavItem[] = [
     { key: 'dashboard', label: '仪表盘', icon: BarChart3 },
@@ -255,6 +332,23 @@ function Shell({ session, onLogout }: { session: Session; onLogout: () => void }
     ...(admin ? [{ key: 'accounts', label: '账号管理', icon: UserCog }] : []),
     { key: 'docs', label: '系统文档', icon: FileText },
   ];
+
+  useEffect(() => {
+    noticeSink = (next) => {
+      setNotice(next);
+      window.setTimeout(() => setNotice(null), 3200);
+    };
+    const listener = (event: Event) => {
+      const detail = (event as CustomEvent<{ message: string; type: 'success' | 'error' }>).detail;
+      setNotice(detail);
+      window.setTimeout(() => setNotice(null), 3200);
+    };
+    window.addEventListener('library-notice', listener);
+    return () => {
+      noticeSink = null;
+      window.removeEventListener('library-notice', listener);
+    };
+  }, []);
 
   return (
     <div className="app-shell">
@@ -290,6 +384,7 @@ function Shell({ session, onLogout }: { session: Session; onLogout: () => void }
           </div>
         </header>
         <main className="content">
+          {notice && <div className={`notice ${notice.type}`}>{notice.message}</div>}
           {active === 'dashboard' && <DashboardPage session={session} />}
           {active === 'books' && <BooksPage session={session} />}
           {active === 'readers' && <ReadersPage session={session} />}
@@ -384,19 +479,29 @@ function BooksPage({ session }: { session: Session }) {
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    await request(editing ? `/books/${form.isbn}` : '/books', session, {
-      method: editing ? 'PUT' : 'POST',
-      body: JSON.stringify(form),
-    });
-    setForm(emptyBook);
-    setEditing(false);
-    await load();
+    try {
+      await request(editing ? `/books/${form.isbn}` : '/books', session, {
+        method: editing ? 'PUT' : 'POST',
+        body: JSON.stringify(form),
+      });
+      setForm(emptyBook);
+      setEditing(false);
+      await load();
+      notify(editing ? '图书信息已更新。' : '图书已新增。');
+    } catch {
+      // Error is shown by request().
+    }
   }
 
   async function remove(isbn: string) {
     if (!confirm('确认删除该图书？')) return;
-    await request(`/books/${isbn}`, session, { method: 'DELETE' });
-    await load();
+    try {
+      await request(`/books/${isbn}`, session, { method: 'DELETE' });
+      await load();
+      notify('图书已删除。');
+    } catch {
+      // Error is shown by request().
+    }
   }
 
   return (
@@ -405,7 +510,7 @@ function BooksPage({ session }: { session: Session }) {
       q={q}
       setQ={setQ}
       onSearch={load}
-      action={admin ? <button className="secondary-button" onClick={() => { setForm(emptyBook); setEditing(false); }}><Plus size={16} />新增</button> : null}
+      action={admin ? <button className="secondary-button" onClick={() => { setForm(emptyBook); setEditing(false); notify('已切换到新增图书表单。'); }}><Plus size={16} />新增</button> : null}
     >
       {admin && (
         <form className="edit-grid" onSubmit={save}>
@@ -451,24 +556,39 @@ function ReadersPage({ session }: { session: Session }) {
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    await request(editing ? `/readers/${form.readerCardNo}` : '/readers', session, {
-      method: editing ? 'PUT' : 'POST',
-      body: JSON.stringify(form),
-    });
-    setForm(emptyReader);
-    setEditing(false);
-    await load();
+    try {
+      await request(editing ? `/readers/${form.readerCardNo}` : '/readers', session, {
+        method: editing ? 'PUT' : 'POST',
+        body: JSON.stringify(form),
+      });
+      setForm(emptyReader);
+      setEditing(false);
+      await load();
+      notify(editing ? '读者信息已更新。' : '读者已新增。');
+    } catch {
+      // Error is shown by request().
+    }
   }
 
   async function remove(cardNo: string) {
     if (!confirm('确认删除该读者？')) return;
-    await request(`/readers/${cardNo}`, session, { method: 'DELETE' });
-    await load();
+    try {
+      await request(`/readers/${cardNo}`, session, { method: 'DELETE' });
+      await load();
+      notify('读者已删除。');
+    } catch {
+      // Error is shown by request().
+    }
   }
 
   async function pay(cardNo: string) {
-    await request(`/readers/${cardNo}/pay-fine`, session, { method: 'POST', body: '{}' });
-    await load();
+    try {
+      await request(`/readers/${cardNo}/pay-fine`, session, { method: 'POST', body: '{}' });
+      await load();
+      notify('罚款状态已更新。');
+    } catch {
+      // Error is shown by request().
+    }
   }
 
   return (
@@ -547,47 +667,71 @@ function LoansPage({ session }: { session: Session }) {
     }
   }, []);
 
+  useEffect(() => {
+    void load();
+  }, [status]);
+
   async function save(event: React.FormEvent) {
     event.preventDefault();
     const body = {
       ...form,
       returnDate: form.returnDate || null,
     };
-    await request(editingId ? `/borrow-records/${editingId}` : '/borrow-records', session, {
-      method: editingId ? 'PUT' : 'POST',
-      body: JSON.stringify(body),
-    });
-    setForm(emptyLoan);
-    setEditingId(null);
-    await load();
+    try {
+      await request(editingId ? `/borrow-records/${editingId}` : '/borrow-records', session, {
+        method: editingId ? 'PUT' : 'POST',
+        body: JSON.stringify(body),
+      });
+      setForm(emptyLoan);
+      setEditingId(null);
+      await load();
+      notify(editingId ? '借阅记录已更新。' : '借阅记录已新增。');
+    } catch {
+      // Error is shown by request().
+    }
   }
 
   async function borrow() {
-    await request('/borrow-records/borrow', session, {
-      method: 'POST',
-      body: JSON.stringify({
-        readerCardNo: form.readerCardNo,
-        isbn: form.isbn,
-        borrowDate: form.borrowDate,
-        loanDays: form.loanDays,
-      }),
-    });
-    setForm(emptyLoan);
-    await load();
+    try {
+      await request('/borrow-records/borrow', session, {
+        method: 'POST',
+        body: JSON.stringify({
+          readerCardNo: form.readerCardNo,
+          isbn: form.isbn,
+          borrowDate: form.borrowDate,
+          loanDays: form.loanDays,
+        }),
+      });
+      setForm(emptyLoan);
+      await load();
+      notify('借书办理成功。');
+    } catch {
+      // Error is shown by request().
+    }
   }
 
   async function returnBook(loanId: number) {
-    await request(`/borrow-records/${loanId}/return`, session, {
-      method: 'POST',
-      body: JSON.stringify({ returnDate: today() }),
-    });
-    await load();
+    try {
+      await request(`/borrow-records/${loanId}/return`, session, {
+        method: 'POST',
+        body: JSON.stringify({ returnDate: today() }),
+      });
+      await load();
+      notify('还书办理成功。');
+    } catch {
+      // Error is shown by request().
+    }
   }
 
   async function remove(loanId: number) {
     if (!confirm('确认删除该借阅记录？')) return;
-    await request(`/borrow-records/${loanId}`, session, { method: 'DELETE' });
-    await load();
+    try {
+      await request(`/borrow-records/${loanId}`, session, { method: 'DELETE' });
+      await load();
+      notify('借阅记录已删除。');
+    } catch {
+      // Error is shown by request().
+    }
   }
 
   return (
@@ -643,19 +787,29 @@ function AccountsPage({ session }: { session: Session }) {
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    await request(editingId ? `/accounts/${editingId}` : '/accounts', session, {
-      method: editingId ? 'PUT' : 'POST',
-      body: JSON.stringify({ ...form, readerCardNo: form.role === 'Reader' ? form.readerCardNo : null }),
-    });
-    setForm(emptyAccount);
-    setEditingId(null);
-    await load();
+    try {
+      await request(editingId ? `/accounts/${editingId}` : '/accounts', session, {
+        method: editingId ? 'PUT' : 'POST',
+        body: JSON.stringify({ ...form, readerCardNo: form.role === 'Reader' ? form.readerCardNo : null }),
+      });
+      setForm(emptyAccount);
+      setEditingId(null);
+      await load();
+      notify(editingId ? '账号已更新。' : '账号已新增。');
+    } catch {
+      // Error is shown by request().
+    }
   }
 
   async function remove(accountId: number) {
     if (!confirm('确认删除该账号？')) return;
-    await request(`/accounts/${accountId}`, session, { method: 'DELETE' });
-    await load();
+    try {
+      await request(`/accounts/${accountId}`, session, { method: 'DELETE' });
+      await load();
+      notify('账号已删除。');
+    } catch {
+      // Error is shown by request().
+    }
   }
 
   return (
