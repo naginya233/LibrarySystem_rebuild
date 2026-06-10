@@ -9,6 +9,19 @@
 - 数据库：SQL Server 2022 Docker
 - 桌面壳：WinForms + WebView2
 
+## 支持平台
+
+| 场景 | Windows | Linux | macOS |
+| --- | --- | --- | --- |
+| Web 系统 | 支持 | 支持 | 支持 |
+| SQL Server Docker | 支持 | 支持 | 支持 |
+| 后端 API | 支持 | 支持 | 支持 |
+| 前端构建 | 支持 | 支持 | 支持 |
+| WebView2 桌面版 | 支持 | 不支持 | 不支持 |
+| Windows 安装包 | 支持 | 不支持 | 不支持 |
+
+推荐演示环境是 Windows，因为它同时支持 Docker SQL Server、Web 系统、WebView2 桌面壳和安装包。Linux/macOS 可以运行 Web 版，但不能运行 WinForms WebView2 桌面版。
+
 ## 默认账号
 
 - 管理员：`admin / admin123`
@@ -16,7 +29,7 @@
 
 ## 快速启动
 
-以下命令均从项目根目录执行。请先启动 Docker Desktop，或在 Linux 环境中确认 Docker Engine 正在运行。
+以下命令均从项目根目录执行。请先启动 Docker Desktop，或在 Linux/macOS 环境中确认 Docker Engine 正在运行。
 
 ```powershell
 cd deploy
@@ -31,6 +44,20 @@ dotnet run
 ```
 
 浏览器访问：`http://localhost:5297`
+
+Linux/macOS 使用 `/` 路径分隔符：
+
+```bash
+cd deploy
+docker compose up -d
+
+cd ../client
+npm install
+npm run build
+
+cd ../server
+dotnet run
+```
 
 ## Windows 桌面版
 

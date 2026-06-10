@@ -2,11 +2,14 @@
 
 ## 1. 环境要求
 
-- Windows 10/11
-- Docker Desktop
-- .NET SDK 8
-- Node.js 20 或更高
-- WebView2 Runtime
+- Web 版：Windows、Linux、macOS 均可运行。
+- 桌面版：仅支持 Windows 10/11，因为桌面壳使用 WinForms + WebView2。
+- 数据库：SQL Server 2022 Docker，需 Docker Desktop 或 Docker Engine。
+- 后端：.NET SDK 8。
+- 前端：Node.js 20 或更高。
+- 桌面运行时：WebView2 Runtime。
+
+推荐演示环境是 Windows，可同时运行 Web 版、桌面版和安装包。Linux/macOS 适合运行 Web 版。
 
 ## 2. 启动数据库
 
@@ -50,6 +53,8 @@ dotnet run
 ```text
 http://localhost:5297
 ```
+
+Linux/macOS 命令相同，只需使用 `/` 作为路径分隔符。
 
 ## 5. 启动桌面端
 
