@@ -563,6 +563,11 @@ function LoansPage({ session }: { session: Session }) {
   }
 
   async function borrow() {
+    const reader = readers.find((item) => item.readerCardNo === form.readerCardNo);
+    if (reader && reader.unpaidFine > 0) {
+      alert('该账户存在未缴欠款，不能借书。');
+      return;
+    }
     await request('/borrow-records/borrow', session, {
       method: 'POST',
       body: JSON.stringify({
