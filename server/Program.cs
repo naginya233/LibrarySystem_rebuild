@@ -176,13 +176,13 @@ books.MapPut("/{isbn}", async (string isbn, UpsertBookRequest request, SqlConnec
 books.MapDelete("/{isbn}", async (string isbn, SqlConnectionFactory db) =>
 {
     await using var connection = db.Create();
-    var openLoans = await connection.ExecuteScalarAsync<int>(
-        "SELECT COUNT(1) FROM dbo.BorrowRecords WHERE Isbn = @isbn AND ReturnDate IS NULL",
+    var loanCount = await connection.ExecuteScalarAsync<int>(
+        "SELECT COUNT(1) FROM dbo.BorrowRecords WHERE Isbn = @isbn",
         new { isbn });
 
-    if (openLoans > 0)
+    if (loanCount > 0)
     {
-        return Results.Conflict(new { message = "该图书存在未归还记录，不能删除。" });
+        return Results.Conflict(new { message = "该图书存在借阅记录，不能删除。" });
     }
 
     var affected = await connection.ExecuteAsync("DELETE FROM dbo.Books WHERE Isbn = @isbn", new { isbn });
@@ -211,7 +211,7 @@ readers.MapGet("", async (string? q, SqlConnectionFactory db) =>
         new { Q = string.IsNullOrWhiteSpace(q) ? null : q.Trim() });
 
     return Results.Ok(rows);
-});
+}).RequireAuthorization("AdminOnly");
 
 readers.MapGet("/{cardNo}", async (string cardNo, ClaimsPrincipal user, SqlConnectionFactory db) =>
 {
@@ -282,13 +282,13 @@ readers.MapPut("/{cardNo}", async (string cardNo, UpsertReaderRequest request, S
 readers.MapDelete("/{cardNo}", async (string cardNo, SqlConnectionFactory db) =>
 {
     await using var connection = db.Create();
-    var openLoans = await connection.ExecuteScalarAsync<int>(
-        "SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReaderCardNo = @cardNo AND ReturnDate IS NULL",
+    var loanCount = await connection.ExecuteScalarAsync<int>(
+        "SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReaderCardNo = @cardNo",
         new { cardNo });
 
-    if (openLoans > 0)
+    if (loanCount > 0)
     {
-        return Results.Conflict(new { message = "该读者存在未归还图书，不能删除。" });
+        return Results.Conflict(new { message = "该读者存在借阅记录，不能删除。" });
     }
 
     await connection.ExecuteAsync("DELETE FROM dbo.Accounts WHERE ReaderCardNo = @cardNo", new { cardNo });
@@ -323,6 +323,11 @@ accounts.MapGet("", async (SqlConnectionFactory db) =>
 
 accounts.MapPost("", async (UpsertAccountRequest request, SqlConnectionFactory db) =>
 {
+    if (string.IsNullOrWhiteSpace(request.Password))
+    {
+        return Results.BadRequest(new { message = "新增账号必须填写密码。" });
+    }
+
     var salt = "LIBRARY_SYSTEM_2026";
     var hash = PasswordService.Hash(request.Username, request.Password, salt);
     await using var connection = db.Create();
@@ -338,9 +343,24 @@ accounts.MapPost("", async (UpsertAccountRequest request, SqlConnectionFactory d
 
 accounts.MapPut("/{accountId:int}", async (int accountId, UpsertAccountRequest request, SqlConnectionFactory db) =>
 {
+    await using var connection = db.Create();
+    if (string.IsNullOrWhiteSpace(request.Password))
+    {
+        var affectedWithoutPassword = await connection.ExecuteAsync(
+            """
+            UPDATE dbo.Accounts
+               SET Username = @Username,
+                   Role = @Role,
+                   ReaderCardNo = @ReaderCardNo,
+                   IsEnabled = @IsEnabled
+             WHERE AccountId = @accountId
+            """,
+            new { accountId, request.Username, request.Role, request.ReaderCardNo, request.IsEnabled });
+        return affectedWithoutPassword == 0 ? Results.NotFound() : Results.NoContent();
+    }
+
     var salt = "LIBRARY_SYSTEM_2026";
     var hash = PasswordService.Hash(request.Username, request.Password, salt);
-    await using var connection = db.Create();
     var affected = await connection.ExecuteAsync(
         """
         UPDATE dbo.Accounts
@@ -439,14 +459,29 @@ loans.MapDelete("/{loanId:int}", async (int loanId, SqlConnectionFactory db) =>
     return affected == 0 ? Results.NotFound() : Results.NoContent();
 }).RequireAuthorization("AdminOnly");
 
-loans.MapPost("/borrow", async (BorrowBookRequest request, SqlConnectionFactory db) =>
+loans.MapPost("/borrow", async (BorrowBookRequest request, ClaimsPrincipal user, SqlConnectionFactory db) =>
 {
     try
     {
+        var readerCardNo = request.ReaderCardNo;
+        if (!user.IsInRole("Admin"))
+        {
+            readerCardNo = user.FindFirstValue("readerCardNo") ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(readerCardNo))
+            {
+                return Results.Forbid();
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(readerCardNo))
+        {
+            return Results.BadRequest(new { message = "请选择读者。" });
+        }
+
         await using var connection = db.Create();
         var loanIdDecimal = await connection.ExecuteScalarAsync<decimal>(
             "dbo.sp_BorrowBook",
-            new { request.ReaderCardNo, request.Isbn, request.BorrowDate, request.LoanDays },
+            new { ReaderCardNo = readerCardNo, request.Isbn, request.BorrowDate, request.LoanDays },
             commandType: CommandType.StoredProcedure);
         return Results.Ok(new { loanId = Convert.ToInt32(loanIdDecimal) });
     }
@@ -454,7 +489,7 @@ loans.MapPost("/borrow", async (BorrowBookRequest request, SqlConnectionFactory 
     {
         return Results.BadRequest(new { message = ex.Message });
     }
-}).RequireAuthorization("AdminOnly");
+}).RequireAuthorization();
 
 loans.MapPost("/{loanId:int}/return", async (int loanId, ReturnBookRequest request, SqlConnectionFactory db) =>
 {
@@ -505,42 +540,54 @@ reports.MapGet("/dashboard", async (ClaimsPrincipal user, SqlConnectionFactory d
         var readerStats = await connection.QuerySingleAsync(
             """
             SELECT
-                (SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReaderCardNo = @readerCardNo AND ReturnDate IS NULL) AS CurrentLoans,
-                (SELECT COUNT(1) FROM dbo.vw_OverdueBorrowRecords WHERE ReaderCardNo = @readerCardNo) AS OverdueLoans,
-                (SELECT ISNULL(SUM(Fine), 0) FROM dbo.BorrowRecords WHERE ReaderCardNo = @readerCardNo AND Fine > 0 AND FinePaid = 0) AS UnpaidFine,
-                (SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReaderCardNo = @readerCardNo) AS TotalLoans
+                (SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReaderCardNo = @readerCardNo AND ReturnDate IS NULL) AS currentLoans,
+                (SELECT COUNT(1) FROM dbo.vw_OverdueBorrowRecords WHERE ReaderCardNo = @readerCardNo) AS overdueLoans,
+                (SELECT ISNULL(SUM(Fine), 0) FROM dbo.BorrowRecords WHERE ReaderCardNo = @readerCardNo AND Fine > 0 AND FinePaid = 0) AS unpaidFine,
+                (SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReaderCardNo = @readerCardNo) AS totalLoans
             """,
             new { readerCardNo });
-        return Results.Ok(new { stats = readerStats, monthly = Array.Empty<object>(), popular = Array.Empty<object>() });
+
+        var readerMonthly = await connection.QueryAsync(
+            """
+            SELECT FORMAT(BorrowDate, 'yyyy-MM') AS month, COUNT(1) AS count
+            FROM dbo.BorrowRecords
+            WHERE ReaderCardNo = @readerCardNo
+              AND BorrowDate >= DATEADD(MONTH, -6, CAST(GETDATE() AS DATE))
+            GROUP BY FORMAT(BorrowDate, 'yyyy-MM')
+            ORDER BY month
+            """,
+            new { readerCardNo });
+
+        return Results.Ok(new { stats = readerStats, monthly = readerMonthly, popular = Array.Empty<object>() });
     }
 
     var stats = await connection.QuerySingleAsync(
         """
         SELECT
-            (SELECT COUNT(1) FROM dbo.Books) AS BookKinds,
-            (SELECT ISNULL(SUM(TotalCopies), 0) FROM dbo.Books) AS TotalCopies,
-            (SELECT ISNULL(SUM(AvailableCopies), 0) FROM dbo.Books) AS AvailableCopies,
-            (SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReturnDate IS NULL) AS CurrentLoans,
-            (SELECT COUNT(1) FROM dbo.vw_OverdueBorrowRecords) AS OverdueLoans,
-            (SELECT ISNULL(SUM(Fine), 0) FROM dbo.BorrowRecords WHERE Fine > 0 AND FinePaid = 0) AS UnpaidFine
+            (SELECT COUNT(1) FROM dbo.Books) AS bookKinds,
+            (SELECT ISNULL(SUM(TotalCopies), 0) FROM dbo.Books) AS totalCopies,
+            (SELECT ISNULL(SUM(AvailableCopies), 0) FROM dbo.Books) AS availableCopies,
+            (SELECT COUNT(1) FROM dbo.BorrowRecords WHERE ReturnDate IS NULL) AS currentLoans,
+            (SELECT COUNT(1) FROM dbo.vw_OverdueBorrowRecords) AS overdueLoans,
+            (SELECT ISNULL(SUM(Fine), 0) FROM dbo.BorrowRecords WHERE Fine > 0 AND FinePaid = 0) AS unpaidFine
         """);
 
     var monthly = await connection.QueryAsync(
         """
-        SELECT FORMAT(BorrowDate, 'yyyy-MM') AS Month, COUNT(1) AS Count
+        SELECT FORMAT(BorrowDate, 'yyyy-MM') AS month, COUNT(1) AS count
         FROM dbo.BorrowRecords
         WHERE BorrowDate >= DATEADD(MONTH, -6, CAST(GETDATE() AS DATE))
         GROUP BY FORMAT(BorrowDate, 'yyyy-MM')
-        ORDER BY Month
+        ORDER BY month
         """);
 
     var popular = await connection.QueryAsync(
         """
-        SELECT TOP 5 b.Title, COUNT(1) AS Count
+        SELECT TOP 5 b.Title AS title, COUNT(1) AS count
         FROM dbo.BorrowRecords br
         JOIN dbo.Books b ON b.Isbn = br.Isbn
         GROUP BY b.Title
-        ORDER BY Count DESC
+        ORDER BY count DESC
         """);
 
     return Results.Ok(new { stats, monthly, popular });
@@ -646,7 +693,7 @@ public sealed record LoginRequest(string Username, string Password);
 public sealed record LoginResponse(string Token, string Username, string Role, string? ReaderCardNo);
 public sealed record AccountRow(int AccountId, string Username, string PasswordHash, string PasswordSalt, string Role, string? ReaderCardNo, bool IsEnabled);
 public sealed record AccountDto(int AccountId, string Username, string Role, string? ReaderCardNo, bool IsEnabled);
-public sealed record UpsertAccountRequest(string Username, string Password, string Role, string? ReaderCardNo, bool IsEnabled);
+public sealed record UpsertAccountRequest(string Username, string? Password, string Role, string? ReaderCardNo, bool IsEnabled);
 public sealed record BookDto(string Isbn, string Title, string Publisher, string Author, int TotalCopies, int AvailableCopies, bool IsBorrowable);
 public sealed record UpsertBookRequest(string Isbn, string Title, string Publisher, string Author, int TotalCopies, int AvailableCopies, bool IsBorrowable);
 public sealed record ReaderDto(string ReaderCardNo, string Name, string Gender, string Title, int MaxBorrowCount, int BorrowedCount, string Department, string? Phone, decimal UnpaidFine);
